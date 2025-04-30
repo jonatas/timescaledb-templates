@@ -9,6 +9,7 @@ This project uses TimescaleDB to:
 - Track the most popular websites over time
 - Provide insights via a real-time dashboard
 - Test and monitor different traffic patterns
+- Simulate AI domain traffic patterns (OpenAI, Claude, Anthropic, Perplexity)
 
 ## Quick Start
 
@@ -45,7 +46,7 @@ The `webtop.sh` script provides the following commands:
 | `monitor` | Show unified monitoring dashboard |
 | `setup` | Set up traffic patterns for testing |
 | `setup-db` | Run the main database setup script without restarting services |
-| `reset` | Reset the database (clear all data) |
+| `reset` | Reset the database (clear all data and remove all traffic generation jobs) |
 | `help` | Show help message |
 
 ### Job Management and Cleanup
@@ -56,6 +57,7 @@ The system includes a job management system that:
    - All job cleanup is handled by a single `cleanup_all_jobs()` function
    - Located in `reset.sql` to ensure availability during resets
    - Targets specific job types: data generation, candidate population, and elections
+   - **Note**: The `reset` command will remove all traffic generation jobs, including AI domain patterns
 
 2. **Reset Process**:
    - Safely stops all running jobs
@@ -77,6 +79,37 @@ The system includes a job management system that:
      D --> E[Schedule Core Jobs]
      E --> F[Verify Job Status]
    ```
+
+### AI Domain Traffic Patterns
+
+The system includes predefined traffic patterns for popular AI domains in `sql/setup/ai-domains.sql`:
+
+1. **OpenAI (openai.com)**:
+   - Steady high traffic: 300-500 hits every 5 seconds
+   - Simulates consistent high-volume API usage
+
+2. **Claude (claude.ai)**:
+   - Bursty traffic: 800-1000 hits every 30 seconds
+   - Simulates periodic high-volume requests
+
+3. **Anthropic (anthropic.com)**:
+   - Growing traffic: Starts with 100 hits, increases by 50 every minute
+   - Simulates increasing adoption over time
+
+4. **Perplexity (perplexity.ai)**:
+   - Declining traffic: Starts with 500 hits, decreases by 20 every minute
+   - Simulates decreasing usage patterns
+
+To apply these patterns:
+```bash
+# After starting the services
+docker exec -it timescaledb psql -U postgres -d website_tracker -f /sql/setup/ai-domains.sql
+```
+
+Monitor the patterns using:
+```sql
+SELECT * FROM monitor_traffic_patterns();
+```
 
 ### Database Setup Integration
 

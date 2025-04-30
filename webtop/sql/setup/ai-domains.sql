@@ -38,8 +38,7 @@ BEGIN
             'use_specific_domain', true,
             'domain', 'openai.com',
             'amount', amount
-        ),
-        description => 'Generating ' || amount || ' requests/min for openai.com (Steady high traffic)'
+        )
     ) INTO job_id;
     job_ids := array_append(job_ids, job_id);
     RAISE NOTICE 'Scheduled steady high traffic for openai.com with job_id=%', job_id;
@@ -54,8 +53,7 @@ BEGIN
             'use_specific_domain', true,
             'domain', 'claude.ai',
             'amount', amount
-        ),
-        description => 'Generating ' || amount || ' requests/min for claude.ai (Bursty traffic)'
+        )
     ) INTO job_id;
     job_ids := array_append(job_ids, job_id);
     RAISE NOTICE 'Scheduled bursty traffic for claude.ai with job_id=%', job_id;
@@ -70,8 +68,7 @@ BEGIN
             'domain', 'anthropic.com',
             'amount', 100,
             'growth_rate', 50
-        ),
-        description => 'Generating 100 requests/min for anthropic.com (Growing traffic, +50/min)'
+        )
     ) INTO job_id;
     job_ids := array_append(job_ids, job_id);
     RAISE NOTICE 'Scheduled growing traffic for anthropic.com with job_id=%', job_id;
@@ -86,8 +83,7 @@ BEGIN
             'domain', 'perplexity.ai',
             'amount', 500,
             'growth_rate', -20
-        ),
-        description => 'Generating 500 requests/min for perplexity.ai (Declining traffic, -20/min)'
+        )
     ) INTO job_id;
     job_ids := array_append(job_ids, job_id);
     RAISE NOTICE 'Scheduled declining traffic for perplexity.ai with job_id=%', job_id;
@@ -109,24 +105,24 @@ BEGIN
     RETURN QUERY
     WITH recent_stats AS (
         SELECT 
-            domain,
-            SUM(total) as recent_hits
-        FROM domain_stats_10m
-        WHERE time_bucket > now() - interval '1 hour'
-        GROUP BY domain
+            d.domain,
+            SUM(d.total)::bigint as recent_hits
+        FROM domain_stats_10m d
+        WHERE d.bucket > now() - interval '1 hour'
+        GROUP BY d.domain
     ),
     previous_stats AS (
         SELECT 
-            domain,
-            SUM(total) as previous_hits
-        FROM domain_stats_10m
-        WHERE time_bucket > now() - interval '2 hours'
-          AND time_bucket <= now() - interval '1 hour'
-        GROUP BY domain
+            d.domain,
+            SUM(d.total)::bigint as previous_hits
+        FROM domain_stats_10m d
+        WHERE d.bucket > now() - interval '2 hours'
+          AND d.bucket <= now() - interval '1 hour'
+        GROUP BY d.domain
     )
     SELECT 
         r.domain,
-        (SELECT SUM(total_hits) FROM top_websites_longterm WHERE domain = r.domain) as total_hits,
+        COALESCE((SELECT t.total_hits FROM top_websites_longterm t WHERE t.domain = r.domain), 0::bigint) as total_hits,
         r.recent_hits,
         CASE 
             WHEN r.recent_hits > p.previous_hits * 1.2 THEN 'Growing'

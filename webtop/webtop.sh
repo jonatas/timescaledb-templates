@@ -11,7 +11,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default database connection string
-DEFAULT_DB_URI="postgresql://postgres:password@0.0.0.0:5432/website_tracker"
+DEFAULT_DB_URI="postgresql://postgres:password@0.0.0.0:5433/website_tracker"
 
 # Function to anonymize database URI
 anonymize_uri() {
@@ -56,6 +56,7 @@ show_usage() {
   echo "  stop        - Stop traffic pattern generation"
   echo "  reset       - Reset the database (clear all data)"
   echo "  stats       - Run advanced statistical analysis"
+  echo "  psql        - Connect to the database with psql (start hacking!)"
   echo "  help        - Show this help message"
   echo ""
   echo "Options:"
@@ -64,6 +65,7 @@ show_usage() {
   echo "Examples:"
   echo "  $0 start --uri postgresql://user:pass@localhost:5432/mydb"
   echo "  $0 monitor --uri \$demos_uri"
+  echo "  $0 psql    - Connect to the database and start experimenting"
   echo ""
   echo "Proper order of operations:"
   echo "  $0 start"
@@ -379,6 +381,27 @@ restart_services() {
   fi
 }
 
+# Function to connect to database with psql
+connect_psql() {
+  local db_uri=$(get_db_uri)
+  
+  # Check database connection
+  if ! check_db_connection "$db_uri"; then
+    exit 1
+  fi
+  
+  echo -e "${GREEN}Connecting to database...${NC}"
+  echo -e "${YELLOW}Tip: Try these commands to get started:${NC}"
+  echo -e "  ${BLUE}\\dt${NC} - List all tables"
+  echo -e "  ${BLUE}\\df${NC} - List all functions"
+  echo -e "  ${BLUE}SELECT * FROM monitor_traffic_patterns();${NC} - View AI domain traffic"
+  echo -e "  ${BLUE}SELECT * FROM logs LIMIT 5;${NC} - View recent logs"
+  echo ""
+  
+  # Connect to database
+  psql "$db_uri"
+}
+
 # Parse command line arguments
 DB_URI=""
 COMMAND=""
@@ -388,7 +411,7 @@ while [[ $# -gt 0 ]]; do
       DB_URI="$2"
       shift 2
       ;;
-    start|stop|restart|monitor|setup|setup-db|reset|stats|help)
+    start|stop|restart|monitor|setup|setup-db|reset|stats|psql|help)
       COMMAND="$1"
       shift
       ;;
@@ -431,6 +454,9 @@ case "$COMMAND" in
     ;;
   stats)
     run_statistical_analysis
+    ;;
+  psql)
+    connect_psql
     ;;
   help)
     show_usage

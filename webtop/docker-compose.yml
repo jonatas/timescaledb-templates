@@ -22,12 +22,7 @@ services:
         docker-entrypoint.sh postgres &
         sleep 10
         until pg_isready -U postgres; do sleep 1; done
-        psql -U postgres -d website_tracker -f /sql/setup/pipeline.sql &&
-        psql -U postgres -d website_tracker -f /sql/setup/data-generation.sql &&
-        psql -U postgres -d website_tracker -f /sql/setup/setup_traffic_patterns.sql &&
-        psql -U postgres -d website_tracker -f /sql/setup/schedule_traffic_patterns.sql &&
-        psql -U postgres -d website_tracker -f /sql/setup/main.sql;
-        wait
+        psql -U postgres -d website_tracker -f /sql/setup/{main,ai-domains}.sql
       "
 
 volumes:
