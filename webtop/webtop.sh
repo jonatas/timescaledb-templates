@@ -13,6 +13,14 @@ NC='\033[0m' # No Color
 # Default database connection string
 DEFAULT_DB_URI="postgresql://postgres:password@0.0.0.0:5432/website_tracker"
 
+# Function to anonymize database URI
+anonymize_uri() {
+  local uri=$1
+  # Handle both postgres:// and postgresql:// formats
+  # Replace username:password with ****:****
+  echo "$uri" | sed -E 's|(postgres(ql)?://)[^:]+:[^@]+@|\1****:****@|'
+}
+
 # Function to get database URI
 get_db_uri() {
   if [ -n "$DB_URI" ]; then
@@ -20,11 +28,6 @@ get_db_uri() {
   else
     echo "$DEFAULT_DB_URI"
   fi
-}
-
-# Function to check if using custom URI
-is_custom_uri() {
-  [ -n "$DB_URI" ]
 }
 
 # Function to check database connection
@@ -35,71 +38,6 @@ check_db_connection() {
     return 1
   fi
   return 0
-}
-
-# Function to manage Docker services
-manage_docker_services() {
-  local action=$1
-  local db_uri=$(get_db_uri)
-  
-  if is_custom_uri; then
-    echo -e "${YELLOW}Using external database - no Docker services to $action${NC}"
-    return 0
-  fi
-  
-  echo -e "${YELLOW}Note: This requires Docker privileges${NC}"
-  case "$action" in
-    "start")
-      docker compose up -d
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Services started successfully!${NC}"
-        echo -e "${YELLOW}Waiting for database to be ready...${NC}"
-        sleep 5
-      fi
-      ;;
-    "stop")
-      docker compose down
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Services stopped successfully!${NC}"
-      fi
-      ;;
-    "restart")
-      docker compose down
-      docker compose up -d
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Services restarted successfully!${NC}"
-        echo -e "${YELLOW}Waiting for database to be ready...${NC}"
-        sleep 5
-      fi
-      ;;
-    "status")
-      docker compose ps
-      ;;
-  esac
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to $action services${NC}"
-    return 1
-  fi
-  return 0
-}
-
-# Function to run SQL script
-run_sql_script() {
-  local db_uri=$(get_db_uri)
-  local script_path=$1
-  local script_name=$2
-  
-  echo -e "${GREEN}Running $script_name...${NC}"
-  psql "$db_uri" -f "$script_path"
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}$script_name completed successfully!${NC}"
-    return 0
-  else
-    echo -e "${RED}Error: Failed to run $script_name${NC}"
-    return 1
-  fi
 }
 
 # Function to display usage
@@ -124,7 +62,7 @@ show_usage() {
   echo "  --uri URI   - Use custom database URI (e.g., postgresql://user:pass@host:port/db)"
   echo ""
   echo "Examples:"
-  echo "  $0 start --uri postgresql://user:pass@0.0.0.0:5432/mydb"
+  echo "  $0 start --uri postgresql://user:pass@localhost:5432/mydb"
   echo "  $0 monitor --uri \$demos_uri"
   echo ""
   echo "Proper order of operations:"
@@ -140,24 +78,43 @@ show_usage() {
 
 # Function to start services
 start_services() {
-  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local db_uri=$(get_db_uri)
   
   echo -e "${GREEN}Starting WebTop services...${NC}"
+  echo -e "${YELLOW}Note: This requires Docker privileges${NC}"
   
-  # Start Docker services if needed
-  if ! manage_docker_services "start"; then
+  # Start Docker services
+  docker compose up -d
+  
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to start services${NC}"
     exit 1
   fi
   
+  echo -e "${GREEN}Services started successfully!${NC}"
+  
+  # Wait for database to be ready
+  echo -e "${YELLOW}Waiting for database to be ready...${NC}"
+  sleep 5
+  
   # Check database connection
   if ! check_db_connection "$db_uri"; then
-    echo -e "${RED}Error: Database not ready. Please check connection.${NC}"
+    echo -e "${RED}Error: Database not ready. Please check Docker logs.${NC}"
+    exit 1
+  fi
+  
+  # Run the pipeline script
+  echo -e "${GREEN}Running main pipeline script...${NC}"
+  psql "$db_uri" -f sql/setup/pipeline.sql
+  
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to run pipeline script${NC}"
     exit 1
   fi
   
   # Run the main setup script
-  cd "$script_dir/sql/setup" && PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f main.sql
+  echo -e "${GREEN}Running main setup script...${NC}"
+  psql "$db_uri" -f sql/setup/main.sql
   
   if [ $? -eq 0 ]; then
     echo -e "${GREEN}Main setup script completed successfully!${NC}"
@@ -170,22 +127,34 @@ start_services() {
 
 # Function to stop services
 stop_services() {
-  manage_docker_services "stop"
+  local db_uri=$(get_db_uri)
+  
+  # Only stop Docker services if using default database
+  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
+    echo -e "${GREEN}Stopping WebTop services...${NC}"
+    docker compose down
+    
+    if [ $? -eq 0 ]; then
+      echo -e "${GREEN}Services stopped successfully!${NC}"
+    else
+      echo -e "${RED}Error: Failed to stop services${NC}"
+      exit 1
+    fi
+  else
+    echo -e "${YELLOW}Using external database - no services to stop${NC}"
+  fi
 }
 
 # Function to show unified monitoring dashboard
 show_monitoring_dashboard() {
   local db_uri=$(get_db_uri)
+  local anonymized_uri=$(anonymize_uri "$db_uri")
   
   # Check database connection
   if ! check_db_connection "$db_uri"; then
     exit 1
   fi
   
-  # Check if the traffic_patterns_monitor view exists
-  view_exists=$(psql "$db_uri" -t -c "SELECT EXISTS (SELECT FROM pg_views WHERE viewname = 'traffic_patterns_monitor');" | tr -d ' ')
-  
-  # Clear the screen
   clear
   
   echo -e "${BLUE}=========================================${NC}"
@@ -194,82 +163,41 @@ show_monitoring_dashboard() {
   echo ""
   
   # Show service status
-  if ! is_custom_uri; then
+  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
     echo -e "${YELLOW}Service Status:${NC}"
-    manage_docker_services "status"
+    docker compose ps
     echo ""
   else
     echo -e "${YELLOW}Database Status:${NC}"
-    echo -e "Connected to: $db_uri"
+    echo -e "Connected to: $anonymized_uri"
     echo ""
   fi
+
+  echo -e "${YELLOW}Top Domains (Last Hour):${NC}"
+  psql "$db_uri" -c \
+    "SELECT domain, COUNT(*) AS hits FROM logs 
+      WHERE time > NOW() - INTERVAL '1 hour' 
+      GROUP BY domain ORDER BY hits DESC LIMIT 10;"
   
-  # Show traffic patterns if available
-  if [ "$view_exists" = "t" ]; then
-    echo -e "${YELLOW}Traffic Patterns (Last Hour):${NC}"
-    psql "$db_uri" -c \
-      "SELECT domain, total_requests, avg_requests_per_minute, current_traffic_level, trend 
-       FROM traffic_patterns_monitor 
-       ORDER BY total_requests DESC;"
-    
-    echo ""
-    
-    # Show recent activity
-    echo -e "${YELLOW}Recent Activity:${NC}"
-    psql "$db_uri" -c \
-      "SELECT domain, time, COUNT(*) OVER (PARTITION BY domain) as hits 
-       FROM logs 
-       WHERE domain LIKE '%-traffic.com' 
-       AND time > NOW() - INTERVAL '5 minutes' 
-       ORDER BY time DESC LIMIT 10;"
-    
-    echo ""
-    
-    # Show job status
-    echo -e "${YELLOW}Traffic Generation Jobs:${NC}"
-    psql "$db_uri" -c \
-      "SELECT j.job_id, j.proc_name, j.schedule_interval, j.next_start
-       FROM timescaledb_information.jobs j
-       WHERE j.proc_name IN ('generate_log_data_job', 'populate_website_candidates_job', 'elect_top_websites')
-       ORDER BY j.job_id;"
-    
-    echo ""
-    
-    # Show top websites report
-    echo -e "${YELLOW}Top Websites Report:${NC}"
-    psql "$db_uri" -c \
-      "SELECT domain, total_hits, last_election_hits, times_elected, rank
-       FROM top_websites_report
-       ORDER BY rank
-       LIMIT 5;"
-  else
-    # Show basic stats if traffic patterns not set up
-    echo -e "${YELLOW}Top Domains (Last Hour):${NC}"
-    psql "$db_uri" -c \
-      "SELECT domain, COUNT(*) AS hits FROM logs 
-       WHERE time > NOW() - INTERVAL '1 hour' 
-       GROUP BY domain ORDER BY hits DESC LIMIT 10;"
-    
-    echo ""
-    
-    echo -e "${YELLOW}Recent Activity:${NC}"
-    psql "$db_uri" -c \
-      "SELECT domain, time FROM logs 
-       ORDER BY time DESC LIMIT 5;"
-    
-    echo ""
-    
-    echo -e "${YELLOW}Statistics:${NC}"
-    psql "$db_uri" -c \
-      "SELECT 'Total Domains' AS stat, COUNT(DISTINCT domain)::text AS value FROM logs
-       UNION ALL
-       SELECT 'Total Captures' AS stat, COUNT(*)::text AS value FROM logs
-       UNION ALL
-       SELECT 'Earliest Capture' AS stat, to_char(MIN(now() - time), 'DD HH24:MI:SS') AS value FROM logs
-       UNION ALL
-       SELECT 'Latest Capture' AS stat, to_char(MAX(now() - time), 'DD HH24:MI:SS') AS value FROM logs;"
-  fi
+  echo ""
   
+  echo -e "${YELLOW}Recent Activity:${NC}"
+  psql "$db_uri" -c \
+    "SELECT domain, time FROM logs 
+      ORDER BY time DESC LIMIT 5;"
+  
+  echo ""
+  
+  echo -e "${YELLOW}Statistics:${NC}"
+  psql "$db_uri" -c \
+    "SELECT 'Total Domains' AS stat, COUNT(DISTINCT domain)::text AS value FROM logs
+      UNION ALL
+      SELECT 'Total Captures' AS stat, COUNT(*)::text AS value FROM logs
+      UNION ALL
+      SELECT 'Earliest Capture' AS stat, to_char(MIN(now() - time), 'DD HH24:MI:SS') AS value FROM logs
+      UNION ALL
+      SELECT 'Latest Capture' AS stat, to_char(MAX(now() - time), 'DD HH24:MI:SS') AS value FROM logs;"
+
   echo ""
   echo -e "${BLUE}=========================================${NC}"
   echo -e "${YELLOW}Press Ctrl+C to exit dashboard${NC}"
@@ -295,7 +223,17 @@ reset_database() {
   echo ""
   
   if [[ $REPLY =~ ^[Yy]$ ]]; then
-    run_sql_script "sql/maintenance/reset.sql" "Database reset"
+    echo -e "${GREEN}Resetting database...${NC}"
+    
+    # Run the reset script
+    psql "$db_uri" -f sql/maintenance/reset.sql
+    
+    if [ $? -eq 0 ]; then
+      echo -e "${GREEN}Database reset successfully!${NC}"
+    else
+      echo -e "${RED}Error: Failed to reset database${NC}"
+      exit 1
+    fi
   else
     echo -e "${BLUE}Reset cancelled.${NC}"
   fi
@@ -310,7 +248,17 @@ setup_traffic_patterns() {
     exit 1
   fi
   
-  run_sql_script "sql/setup/setup_traffic_patterns.sql" "Traffic patterns setup"
+  echo -e "${GREEN}Setting up traffic patterns for testing...${NC}"
+  
+  # Run the setup traffic patterns script
+  psql "$db_uri" -f sql/setup/setup_traffic_patterns.sql
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}Traffic patterns set up successfully!${NC}"
+  else
+    echo -e "${RED}Error: Failed to set up traffic patterns${NC}"
+    exit 1
+  fi
 }
 
 # Function to stop traffic patterns
@@ -322,7 +270,17 @@ stop_traffic_patterns() {
     exit 1
   fi
   
-  run_sql_script "sql/setup/stop_traffic_patterns.sql" "Traffic pattern generation stop"
+  echo -e "${GREEN}Stopping traffic pattern generation...${NC}"
+  
+  # Run the stop traffic patterns script
+  psql "$db_uri" -f sql/setup/stop_traffic_patterns.sql
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}Traffic pattern generation stopped successfully!${NC}"
+  else
+    echo -e "${RED}Error: Failed to stop traffic pattern generation${NC}"
+    exit 1
+  fi
 }
 
 # Function to run main database setup
@@ -334,7 +292,18 @@ run_main_setup() {
     exit 1
   fi
   
-  run_sql_script "sql/setup/main.sql" "Main database setup"
+  echo -e "${GREEN}Running main database setup script...${NC}"
+  
+  # Run the main setup script
+  psql "$db_uri" -f sql/setup/main.sql
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}Main setup script completed successfully!${NC}"
+    echo -e "Use ${YELLOW}$0 monitor${NC} to see real-time statistics"
+  else
+    echo -e "${RED}Error: Failed to run main setup script${NC}"
+    exit 1
+  fi
 }
 
 # Function to run statistical analysis
@@ -346,29 +315,60 @@ run_statistical_analysis() {
     exit 1
   fi
   
-  run_sql_script "sql/analysis/statistical_analysis.sql" "Statistical analysis"
+  echo -e "${GREEN}Running advanced statistical analysis...${NC}"
+  
+  # Run the statistical analysis script
+  psql "$db_uri" -f sql/analysis/statistical_analysis.sql
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}Statistical analysis completed successfully!${NC}"
+  else
+    echo -e "${RED}Error: Failed to run statistical analysis${NC}"
+    exit 1
+  fi
 }
 
 # Function to restart services
 restart_services() {
-  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local db_uri=$(get_db_uri)
   
   echo -e "${GREEN}Restarting WebTop services...${NC}"
   
-  # Restart Docker services if needed
-  if ! manage_docker_services "restart"; then
+  # Stop services
+  docker compose down
+  
+  # Start services
+  docker compose up -d
+  
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to restart services${NC}"
     exit 1
   fi
   
+  echo -e "${GREEN}Services restarted successfully!${NC}"
+  
+  # Wait for database to be ready
+  echo -e "${YELLOW}Waiting for database to be ready...${NC}"
+  sleep 5
+  
   # Check database connection
   if ! check_db_connection "$db_uri"; then
-    echo -e "${RED}Error: Database not ready. Please check connection.${NC}"
+    echo -e "${RED}Error: Database not ready. Please check Docker logs.${NC}"
+    exit 1
+  fi
+  
+  # Run the pipeline script
+  echo -e "${GREEN}Running main pipeline script...${NC}"
+  psql "$db_uri" -f sql/setup/pipeline.sql
+  
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to run pipeline script${NC}"
     exit 1
   fi
   
   # Run the main setup script
-  cd "$script_dir/sql/setup" && PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f main.sql
+  echo -e "${GREEN}Running main setup script...${NC}"
+  psql "$db_uri" -f sql/setup/main.sql
   
   if [ $? -eq 0 ]; then
     echo -e "${GREEN}Main setup script completed successfully!${NC}"
