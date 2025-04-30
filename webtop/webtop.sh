@@ -22,6 +22,11 @@ get_db_uri() {
   fi
 }
 
+# Function to check if using custom URI
+is_custom_uri() {
+  [ -n "$DB_URI" ]
+}
+
 # Function to check database connection
 check_db_connection() {
   local uri=$1
@@ -30,6 +35,71 @@ check_db_connection() {
     return 1
   fi
   return 0
+}
+
+# Function to manage Docker services
+manage_docker_services() {
+  local action=$1
+  local db_uri=$(get_db_uri)
+  
+  if is_custom_uri; then
+    echo -e "${YELLOW}Using external database - no Docker services to $action${NC}"
+    return 0
+  fi
+  
+  echo -e "${YELLOW}Note: This requires Docker privileges${NC}"
+  case "$action" in
+    "start")
+      docker compose up -d
+      if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Services started successfully!${NC}"
+        echo -e "${YELLOW}Waiting for database to be ready...${NC}"
+        sleep 5
+      fi
+      ;;
+    "stop")
+      docker compose down
+      if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Services stopped successfully!${NC}"
+      fi
+      ;;
+    "restart")
+      docker compose down
+      docker compose up -d
+      if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Services restarted successfully!${NC}"
+        echo -e "${YELLOW}Waiting for database to be ready...${NC}"
+        sleep 5
+      fi
+      ;;
+    "status")
+      docker compose ps
+      ;;
+  esac
+  
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to $action services${NC}"
+    return 1
+  fi
+  return 0
+}
+
+# Function to run SQL script
+run_sql_script() {
+  local db_uri=$(get_db_uri)
+  local script_path=$1
+  local script_name=$2
+  
+  echo -e "${GREEN}Running $script_name...${NC}"
+  psql "$db_uri" -f "$script_path"
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}$script_name completed successfully!${NC}"
+    return 0
+  else
+    echo -e "${RED}Error: Failed to run $script_name${NC}"
+    return 1
+  fi
 }
 
 # Function to display usage
@@ -70,43 +140,23 @@ show_usage() {
 
 # Function to start services
 start_services() {
-  local db_uri=$(get_db_uri)
   local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local db_uri=$(get_db_uri)
   
   echo -e "${GREEN}Starting WebTop services...${NC}"
-  echo -e "${YELLOW}Note: This requires Docker privileges${NC}"
   
-  # Start Docker services
-  docker compose up -d
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to start services${NC}"
+  # Start Docker services if needed
+  if ! manage_docker_services "start"; then
     exit 1
   fi
-  
-  echo -e "${GREEN}Services started successfully!${NC}"
-  
-  # Wait for database to be ready
-  echo -e "${YELLOW}Waiting for database to be ready...${NC}"
-  sleep 5
   
   # Check database connection
   if ! check_db_connection "$db_uri"; then
-    echo -e "${RED}Error: Database not ready. Please check Docker logs.${NC}"
-    exit 1
-  fi
-  
-  # Run the pipeline script
-  echo -e "${GREEN}Running main pipeline script...${NC}"
-  PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f "$script_dir/sql/setup/pipeline.sql"
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to run pipeline script${NC}"
+    echo -e "${RED}Error: Database not ready. Please check connection.${NC}"
     exit 1
   fi
   
   # Run the main setup script
-  echo -e "${GREEN}Running main setup script...${NC}"
   cd "$script_dir/sql/setup" && PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f main.sql
   
   if [ $? -eq 0 ]; then
@@ -120,22 +170,7 @@ start_services() {
 
 # Function to stop services
 stop_services() {
-  local db_uri=$(get_db_uri)
-  
-  # Only stop Docker services if using default database
-  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
-    echo -e "${GREEN}Stopping WebTop services...${NC}"
-    docker compose down
-    
-    if [ $? -eq 0 ]; then
-      echo -e "${GREEN}Services stopped successfully!${NC}"
-    else
-      echo -e "${RED}Error: Failed to stop services${NC}"
-      exit 1
-    fi
-  else
-    echo -e "${YELLOW}Using external database - no services to stop${NC}"
-  fi
+  manage_docker_services "stop"
 }
 
 # Function to show unified monitoring dashboard
@@ -158,10 +193,10 @@ show_monitoring_dashboard() {
   echo -e "${BLUE}=========================================${NC}"
   echo ""
   
-  # Show service status only if using default database
-  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
+  # Show service status
+  if ! is_custom_uri; then
     echo -e "${YELLOW}Service Status:${NC}"
-    docker compose ps
+    manage_docker_services "status"
     echo ""
   else
     echo -e "${YELLOW}Database Status:${NC}"
@@ -190,7 +225,7 @@ show_monitoring_dashboard() {
     
     echo ""
     
-    # Show job status with more details from main.sql
+    # Show job status
     echo -e "${YELLOW}Traffic Generation Jobs:${NC}"
     psql "$db_uri" -c \
       "SELECT j.job_id, j.proc_name, j.schedule_interval, j.next_start
@@ -260,17 +295,7 @@ reset_database() {
   echo ""
   
   if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo -e "${GREEN}Resetting database...${NC}"
-    
-    # Run the reset script
-    psql "$db_uri" -f sql/maintenance/reset.sql
-    
-    if [ $? -eq 0 ]; then
-      echo -e "${GREEN}Database reset successfully!${NC}"
-    else
-      echo -e "${RED}Error: Failed to reset database${NC}"
-      exit 1
-    fi
+    run_sql_script "sql/maintenance/reset.sql" "Database reset"
   else
     echo -e "${BLUE}Reset cancelled.${NC}"
   fi
@@ -285,17 +310,7 @@ setup_traffic_patterns() {
     exit 1
   fi
   
-  echo -e "${GREEN}Setting up traffic patterns for testing...${NC}"
-  
-  # Run the setup traffic patterns script
-  psql "$db_uri" -f sql/setup/setup_traffic_patterns.sql
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Traffic patterns set up successfully!${NC}"
-  else
-    echo -e "${RED}Error: Failed to set up traffic patterns${NC}"
-    exit 1
-  fi
+  run_sql_script "sql/setup/setup_traffic_patterns.sql" "Traffic patterns setup"
 }
 
 # Function to stop traffic patterns
@@ -307,17 +322,7 @@ stop_traffic_patterns() {
     exit 1
   fi
   
-  echo -e "${GREEN}Stopping traffic pattern generation...${NC}"
-  
-  # Run the stop traffic patterns script
-  psql "$db_uri" -f sql/setup/stop_traffic_patterns.sql
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Traffic pattern generation stopped successfully!${NC}"
-  else
-    echo -e "${RED}Error: Failed to stop traffic pattern generation${NC}"
-    exit 1
-  fi
+  run_sql_script "sql/setup/stop_traffic_patterns.sql" "Traffic pattern generation stop"
 }
 
 # Function to run main database setup
@@ -329,18 +334,7 @@ run_main_setup() {
     exit 1
   fi
   
-  echo -e "${GREEN}Running main database setup script...${NC}"
-  
-  # Run the main setup script
-  psql "$db_uri" -f sql/setup/main.sql
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Main setup script completed successfully!${NC}"
-    echo -e "Use ${YELLOW}$0 monitor${NC} to see real-time statistics"
-  else
-    echo -e "${RED}Error: Failed to run main setup script${NC}"
-    exit 1
-  fi
+  run_sql_script "sql/setup/main.sql" "Main database setup"
 }
 
 # Function to run statistical analysis
@@ -352,60 +346,28 @@ run_statistical_analysis() {
     exit 1
   fi
   
-  echo -e "${GREEN}Running advanced statistical analysis...${NC}"
-  
-  # Run the statistical analysis script
-  psql "$db_uri" -f sql/analysis/statistical_analysis.sql
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Statistical analysis completed successfully!${NC}"
-  else
-    echo -e "${RED}Error: Failed to run statistical analysis${NC}"
-    exit 1
-  fi
+  run_sql_script "sql/analysis/statistical_analysis.sql" "Statistical analysis"
 }
 
 # Function to restart services
 restart_services() {
-  local db_uri=$(get_db_uri)
   local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local db_uri=$(get_db_uri)
   
   echo -e "${GREEN}Restarting WebTop services...${NC}"
   
-  # Stop services
-  docker compose down
-  
-  # Start services
-  docker compose up -d
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to restart services${NC}"
+  # Restart Docker services if needed
+  if ! manage_docker_services "restart"; then
     exit 1
   fi
-  
-  echo -e "${GREEN}Services restarted successfully!${NC}"
-  
-  # Wait for database to be ready
-  echo -e "${YELLOW}Waiting for database to be ready...${NC}"
-  sleep 5
   
   # Check database connection
   if ! check_db_connection "$db_uri"; then
-    echo -e "${RED}Error: Database not ready. Please check Docker logs.${NC}"
-    exit 1
-  fi
-  
-  # Run the pipeline script
-  echo -e "${GREEN}Running main pipeline script...${NC}"
-  PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f "$script_dir/sql/setup/pipeline.sql"
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to run pipeline script${NC}"
+    echo -e "${RED}Error: Database not ready. Please check connection.${NC}"
     exit 1
   fi
   
   # Run the main setup script
-  echo -e "${GREEN}Running main setup script...${NC}"
   cd "$script_dir/sql/setup" && PGOPTIONS='--client-min-messages=warning' psql "$db_uri" -X -q -v "ON_ERROR_STOP=1" -f main.sql
   
   if [ $? -eq 0 ]; then

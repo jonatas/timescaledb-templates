@@ -1,6 +1,13 @@
 -- Data Generation Functions for Top Websites Tracker
 -- This file contains all functions related to generating synthetic data
 
+-- Drop existing functions first
+DROP FUNCTION IF EXISTS generate_log_data(text, integer);
+DROP FUNCTION IF EXISTS schedule_data_generation();
+DROP FUNCTION IF EXISTS schedule_top_websites_generation();
+DROP FUNCTION IF EXISTS schedule_random_websites_generation();
+DROP PROCEDURE IF EXISTS generate_log_data_job(int, jsonb);
+
 -- Procedure to generate synthetic log data every second
 CREATE OR REPLACE PROCEDURE generate_log_data_job(job_id_param int, config_param jsonb) 
 LANGUAGE plpgsql AS $$
@@ -105,28 +112,26 @@ BEGIN
 END;
 $$;
 
--- Function to schedule data generation job
+-- Function to schedule data generation
 CREATE OR REPLACE FUNCTION schedule_data_generation() 
-RETURNS int LANGUAGE plpgsql AS $$
+RETURNS int[] LANGUAGE plpgsql AS $$
 DECLARE
-    job_id INTEGER;
+    job_ids int[] := '{}';
+    job_id int;
 BEGIN
-    -- Schedule data generation job (runs every second)
+    -- Schedule random data generation (runs every minute)
     SELECT add_job(
-        'generate_log_data_job', 
-        INTERVAL '1 second', 
+        'generate_log_data_job',
+        INTERVAL '1 minute',
         config => jsonb_build_object(
             'amount', 100,
-            'use_specific_domain', false,
-            'growth_rate', 0,
-            'burst_probability', 0.1,
-            'burst_multiplier', 2
-        )
-    )
-    INTO job_id;
+            'use_specific_domain', false
+        ),
+        initial_start => NOW() + INTERVAL '1 minute'
+    ) INTO job_id;
+    job_ids := array_append(job_ids, job_id);
     
-    RAISE NOTICE 'Scheduled data generation job_id=%', job_id;
-    RETURN job_id;
+    RETURN job_ids;
 END;
 $$;
 

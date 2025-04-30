@@ -276,28 +276,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to clean up all existing jobs
-CREATE OR REPLACE FUNCTION cleanup_all_jobs()
-RETURNS void AS $$
-BEGIN
-    PERFORM delete_job(job_id)
-    FROM timescaledb_information.jobs
-    WHERE proc_name IN ('elect_top_websites');
-END;
-$$ LANGUAGE plpgsql;
-
--- Clean up all existing jobs before proceeding
-SELECT cleanup_all_jobs();
-
--- Create the election job
-SELECT add_job(
-    'elect_top_websites'::regproc,
-    schedule_interval => INTERVAL '1 hour',
-    config => '{"min_requests": 1000}'::jsonb,
-    initial_start => NOW(),
-    fixed_schedule => true
-);
-
 -- Function to schedule website tracking jobs
 CREATE OR REPLACE FUNCTION schedule_website_tracking_jobs() 
 RETURNS int[] LANGUAGE plpgsql AS $$
@@ -327,8 +305,8 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION populate_website_candidates_job(job_id INTEGER, config JSONB)
-RETURNS void AS $$
+CREATE OR REPLACE PROCEDURE populate_website_candidates_job(job_id INTEGER, config JSONB)
+LANGUAGE plpgsql AS $$
 DECLARE
     min_hits_threshold INTEGER;
 BEGIN
@@ -350,7 +328,7 @@ BEGIN
     ON CONFLICT (domain, time) 
     DO UPDATE SET hits = EXCLUDED.hits;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 -- Create the top websites report view
 CREATE OR REPLACE VIEW top_websites_report AS
@@ -368,3 +346,12 @@ SELECT
     ROW_NUMBER() OVER (ORDER BY total_hits DESC) as rank
 FROM top_websites_longterm
 ORDER BY total_hits DESC;
+
+-- Create the election job
+SELECT add_job(
+    'elect_top_websites',
+    schedule_interval => INTERVAL '1 hour',
+    config => '{"min_requests": 1000}'::jsonb,
+    initial_start => NOW(),
+    fixed_schedule => true
+);
