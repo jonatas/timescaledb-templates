@@ -454,7 +454,7 @@ Key partitioning features:
 
 ```mermaid
 graph LR
-    A[Raw Logs<br/>20-min chunks] --> B[10-min Aggregates<br/>domain_stats_10m]
+    A[Raw Logs<br/>20-min chunks] --> B[1-min Aggregates<br/>domain_stats_1m]
     B --> C[1-day Aggregates<br/>domain_stats_1d]
     B --> D[Candidates<br/>populated hourly]
     D --> E[Long-term Storage<br/>elected daily]
@@ -470,8 +470,8 @@ The data flow follows these key stages:
    - Automatic chunk creation and management
 
 2. **Continuous Aggregation**:
-   - **10-minute Aggregates** (`domain_stats_10m`):
-     - Refreshes every 5 minutes
+   - **1-minute Aggregates** (`domain_stats_1m`):
+     - Refreshes every 30 seconds
      - Keeps last 7 days of data
      - Base level for detailed analysis
    - **1-day Aggregates** (`domain_stats_1d`):
@@ -548,9 +548,7 @@ Performance features:
    - Job success rates
    - Compression ratios
    - Query performance metrics
-</details>
-
-## Troubleshooting
+</details>## Troubleshooting
 
 ### Common Issues and Solutions
 
@@ -587,7 +585,6 @@ docker exec -it timescaledb psql -U postgres -c "SELECT job_id, proc_name, sched
 # If jobs are not running, restart the system
 ./webtop.sh restart
 ```
-
 #### 3. Slow Dashboard Performance
 
 **Problem**: The monitoring dashboard is slow to update or respond.
@@ -667,3 +664,6 @@ To add new metrics to the monitoring dashboard:
 1. Create a new continuous aggregate in `pipeline.sql`
 2. Add a new view in `main.sql`
 3. Update the monitoring dashboard query in `webtop.sh`
+
+
+

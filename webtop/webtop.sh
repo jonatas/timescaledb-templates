@@ -9,9 +9,8 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
-
-# Default database connection string
-DEFAULT_DB_URI="postgresql://postgres:password@0.0.0.0:5433/website_tracker"
+source .env
+db_uri=$DATABASE_URL
 
 # Function to anonymize database URI
 anonymize_uri() {
@@ -26,7 +25,7 @@ get_db_uri() {
   if [ -n "$DB_URI" ]; then
     echo "$DB_URI"
   else
-    echo "$DEFAULT_DB_URI"
+    echo "$DATABASE_URL"
   fi
 }
 
@@ -105,26 +104,32 @@ start_services() {
     exit 1
   fi
   
-  # Run the pipeline script
-  echo -e "${GREEN}Running main pipeline script...${NC}"
+  # Run the pipeline script to create the schema (tables, views, MVs)
+  echo -e "${GREEN}Running pipeline setup script...${NC}"
   psql "$db_uri" -f sql/setup/pipeline.sql
-  
   if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to run pipeline script${NC}"
+    echo -e "${RED}Error: Failed to run pipeline setup script${NC}"
     exit 1
   fi
-  
-  # Run the main setup script
-  echo -e "${GREEN}Running main setup script...${NC}"
+
+  # Run the main setup script (loads initial data and schedules jobs)
+  echo -e "${GREEN}Running main database setup script...${NC}"
   psql "$db_uri" -f sql/setup/main.sql
-  
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Main setup script completed successfully!${NC}"
-    echo -e "Use ${YELLOW}$0 monitor${NC} to see real-time statistics"
-  else
-    echo -e "${RED}Error: Failed to run main setup script${NC}"
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to run main database setup script${NC}"
     exit 1
   fi
+
+  # Run AI domains setup script (applies specific traffic patterns and initial data)
+  echo -e "${GREEN}Running AI domains setup script...${NC}"
+  psql "$db_uri" -f sql/setup/ai-domains.sql
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to run AI domains setup script${NC}"
+    exit 1
+  fi
+  
+  echo -e "${GREEN}WebTop services and database setup completed successfully!${NC}"
+  echo -e "Use ${YELLOW}$0 monitor${NC} to see real-time statistics"
 }
 
 # Function to stop services
@@ -132,7 +137,7 @@ stop_services() {
   local db_uri=$(get_db_uri)
   
   # Only stop Docker services if using default database
-  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
+  if [ "$db_uri" = "$DATABASE_URL" ]; then
     echo -e "${GREEN}Stopping WebTop services...${NC}"
     docker compose down
     
@@ -152,53 +157,26 @@ show_monitoring_dashboard() {
   local db_uri=$(get_db_uri)
   local anonymized_uri=$(anonymize_uri "$db_uri")
   
-  # Check database connection
-  if ! check_db_connection "$db_uri"; then
-    exit 1
-  fi
-  
   clear
   
-  echo -e "${BLUE}=========================================${NC}"
-  echo -e "${GREEN}           WebTop Dashboard             ${NC}"
-  echo -e "${BLUE}=========================================${NC}"
+  echo -e "${YELLOW}Database Status:${NC}"
+  echo -e "Connected to: $anonymized_uri"
   echo ""
-  
-  # Show service status
-  if [ "$db_uri" = "$DEFAULT_DB_URI" ]; then
-    echo -e "${YELLOW}Service Status:${NC}"
-    docker compose ps
-    echo ""
-  else
-    echo -e "${YELLOW}Database Status:${NC}"
-    echo -e "Connected to: $anonymized_uri"
-    echo ""
-  fi
 
-  echo -e "${YELLOW}Top Domains (Last Hour):${NC}"
+  echo -e "${YELLOW}Top Domains (Sum of Hourly Stats):${NC}"
   psql "$db_uri" -c \
-    "SELECT domain, COUNT(*) AS hits FROM logs 
-      WHERE time > NOW() - INTERVAL '1 hour' 
-      GROUP BY domain ORDER BY hits DESC LIMIT 10;"
+    "SELECT domain, sum(total) AS hits FROM website_stats_1h
+      GROUP BY domain ORDER BY 2 DESC LIMIT 10;"
   
   echo ""
   
-  echo -e "${YELLOW}Recent Activity:${NC}"
+  echo -e "${YELLOW}Last 10 seconds of Activity:${NC}"
   psql "$db_uri" -c \
-    "SELECT domain, time FROM logs 
-      ORDER BY time DESC LIMIT 5;"
-  
-  echo ""
-  
-  echo -e "${YELLOW}Statistics:${NC}"
-  psql "$db_uri" -c \
-    "SELECT 'Total Domains' AS stat, COUNT(DISTINCT domain)::text AS value FROM logs
-      UNION ALL
-      SELECT 'Total Captures' AS stat, COUNT(*)::text AS value FROM logs
-      UNION ALL
-      SELECT 'Earliest Capture' AS stat, to_char(MIN(now() - time), 'DD HH24:MI:SS') AS value FROM logs
-      UNION ALL
-      SELECT 'Latest Capture' AS stat, to_char(MAX(now() - time), 'DD HH24:MI:SS') AS value FROM logs;"
+    "SELECT count(*) || ' hits in last 10 seconds' FROM logs where time > now() - interval '10 seconds'
+    UNION ALL
+    SELECT COUNT(DISTINCT domain) || ' domains' FROM website_stats_1h
+    UNION ALL
+    SELECT sum(total_hits) || ' hits' FROM top_websites_longterm;"
 
   echo ""
   echo -e "${BLUE}=========================================${NC}"
@@ -213,12 +191,6 @@ show_monitoring_dashboard() {
 
 # Function to reset database
 reset_database() {
-  local db_uri=$(get_db_uri)
-  
-  # Check database connection
-  if ! check_db_connection "$db_uri"; then
-    exit 1
-  fi
   
   echo -e "${YELLOW}Warning: This will delete all captured data!${NC}"
   read -p "Are you sure you want to continue? (y/n) " -n 1 -r
@@ -359,17 +331,16 @@ restart_services() {
     exit 1
   fi
   
-  # Run the pipeline script
-  echo -e "${GREEN}Running main pipeline script...${NC}"
+  # Run the pipeline script to create the schema (tables, views, MVs)
+  echo -e "${GREEN}Running pipeline setup script...${NC}"
   psql "$db_uri" -f sql/setup/pipeline.sql
-  
   if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to run pipeline script${NC}"
+    echo -e "${RED}Error: Failed to run pipeline setup script${NC}"
     exit 1
   fi
-  
-  # Run the main setup script
-  echo -e "${GREEN}Running main setup script...${NC}"
+
+  # Run the main setup script (loads initial data and schedules jobs)
+  echo -e "${GREEN}Running main database setup script...${NC}"
   psql "$db_uri" -f sql/setup/main.sql
   
   if [ $? -eq 0 ]; then

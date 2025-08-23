@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: website_tracker
+      POSTGRES_DB: pipeline
     ports:
       - "5432:5432"
     volumes:
@@ -17,13 +17,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    command: >
-      bash -c "
-        docker-entrypoint.sh postgres &
-        sleep 10
-        until pg_isready -U postgres; do sleep 1; done
-        psql -U postgres -d website_tracker -f /sql/setup/{main,ai-domains}.sql
-      "
+    command: "postgres"
 
 volumes:
   timescaledb_data: 
