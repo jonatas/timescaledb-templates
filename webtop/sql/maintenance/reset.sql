@@ -24,10 +24,19 @@ TRUNCATE logs;
 TRUNCATE top_websites_candidates;
 TRUNCATE top_websites_longterm;
 
--- Refresh continuous aggregates
-CALL refresh_continuous_aggregate('domain_stats_10m', NULL, NULL);
-CALL refresh_continuous_aggregate('domain_stats_1d', NULL, NULL);
-CALL refresh_continuous_aggregate('domain_traffic_stats_1h', NULL, NULL);
+-- Refresh continuous aggregates (only if they exist)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM timescaledb_information.continuous_aggregates WHERE view_name = 'website_stats_1m') THEN
+        CALL refresh_continuous_aggregate('website_stats_1m', NULL, NULL);
+    END IF;
+    IF EXISTS (SELECT 1 FROM timescaledb_information.continuous_aggregates WHERE view_name = 'website_stats_1h') THEN
+        CALL refresh_continuous_aggregate('website_stats_1h', NULL, NULL);
+    END IF;
+    IF EXISTS (SELECT 1 FROM timescaledb_information.continuous_aggregates WHERE view_name = 'website_stats_1d') THEN
+        CALL refresh_continuous_aggregate('website_stats_1d', NULL, NULL);
+    END IF;
+END $$;
 
 -- Show current jobs
 SELECT job_id, proc_name, schedule_interval, next_start

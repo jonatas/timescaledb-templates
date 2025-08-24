@@ -12,12 +12,15 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ./sql:/sql:ro
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     command: "postgres"
 
 volumes:
-  timescaledb_data: 
+  timescaledb_data:
+    driver: local 

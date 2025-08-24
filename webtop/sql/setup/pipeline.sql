@@ -59,8 +59,8 @@ WITH (timescaledb.continuous, timescaledb.materialized_only=false) AS
         time_bucket('1 day', bucket) as bucket,
         domain,
         sum(total) as total,
-        stats_agg(total) as stats_agg,
-        percentile_agg(total) as percentile_agg
+        rollup(stats_agg) as stats_agg,
+        rollup(percentile_agg) as percentile_agg
     FROM website_stats_1h
     GROUP BY 1,2
 WITH NO DATA;
