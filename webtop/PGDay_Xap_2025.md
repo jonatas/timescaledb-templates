@@ -523,10 +523,8 @@ Sistema que processa **500GB diários** mantendo apenas **20GB** de dados essenc
 # Perguntas?
 
 **Contato:** https://ideia.me  
-
 **Linkedin:**  https://www.linkedin.com/in/jonatasdp/
-
-**Código:** https://github.com/jonatas/timescaledb-webtop
+**Código:** https://github.com/jonatas/timescaledb-templates - Pasta `webtop`
 
 
 ## Análise dos Chunks
